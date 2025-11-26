@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Usage: hscript input.hs
+
+mkdir -p /tmp/hscript
+
+awk '
+function reset_block() {
+  block_len = 0;
+}
+
+function push_line(line) {
+  block[block_len++] = line;
+}
+
+# Heuristics for "IO / Template Haskell-ish" lines
+function is_special(line) {
+  # Contains:
+  #   - <-
+  #   - $( ... )
+  #   - declareColumns
+  #   - D.derive ...
+  return (line ~ /<-/ ||
+          line ~ /[$][(]/ ||
+          line ~ /declareColumns/ ||
+          line ~ /D[.]derive/);
+}
+
+function flush_block() {
+  if (block_len == 0) return;
+
+  lang_or_import = 1;   # all LANGUAGE/imports?
+  all_special    = 1;   # every line is IO/TH-ish?
+  any_special    = 0;   # at least one IO/TH-ish line?
+
+  for (i = 0; i < block_len; i++) {
+    line = block[i];
+
+    if (line !~ /^{-# LANGUAGE/ && line !~ /^import[[:space:]]+/) {
+      lang_or_import = 0;
+    }
+
+    if (is_special(line)) {
+      any_special = 1;
+    } else {
+      all_special = 0;
+    }
+  }
+
+  if (all_special && block_len > 0) {
+    # All IO/TH-ish: each gets its own :{ ... :}
+    for (i = 0; i < block_len; i++) {
+      print ":{";
+      print block[i];
+      print ":}";
+    }
+  } else if (lang_or_import || block_len > 1 || any_special) {
+    # Multi-line chunk, or imports/pragmas, or a single special line
+    print ":{";
+    for (i = 0; i < block_len; i++) {
+      print block[i];
+    }
+    print ":}";
+  } else {
+    # Single, non-special line (e.g. `default (Int, T.Text)`)
+    for (i = 0; i < block_len; i++) {
+      print block[i];
+    }
+  }
+
+  reset_block();
+}
+
+BEGIN {
+  reset_block();
+}
+
+# GHCi-style commands (e.g. :set, :load) — pass through
+/^[[:space:]]*:/ {
+  flush_block();
+  print;
+  next;
+}
+
+# Blank line: end current chunk, keep blank
+NF == 0 {
+  flush_block();
+  print "";
+  next;
+}
+
+# Any other line is part of the current Haskell chunk
+{
+  push_line($0);
+}
+
+END {
+  flush_block();
+}
+' "$@" > /tmp/hscript/script.ghci
+
+ghc -e ':script /tmp/hscript/script.ghci'
