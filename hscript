@@ -75,6 +75,11 @@ BEGIN {
   reset_block();
 }
 
+# Shell shebang line on first line — ignore
+NR == 1 && /^#!/ {
+  next;
+}
+
 # GHCi-style commands (e.g. :set, :load) — pass through
 /^[[:space:]]*:/ {
   flush_block();
